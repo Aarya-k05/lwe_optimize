@@ -1,0 +1,75 @@
+Fresh LWE-based recursive stream-cipher simulation
+===================================================
+State dimension: 18 (expected 18)
+Control steps: 200 (expected 200)
+
+Plant and controller
+--------------------
+Masses: 9; mass per body: 1.0 kg
+Spring constant: 2.0 N/m; damping: 1.0 Ns/m
+Topology: first mass fixed to wall; nearest-neighbour springs/dampers; last mass free.
+Actuator: force on mass 9; observed state: all 18 states.
+State order: [pos1, vel1, pos2, vel2, ..., pos9, vel9]
+Sampling interval: 0.1 s; duration: 20.0 s
+Initial state: all zero except x0[16] = 1.0 m; initial velocities zero.
+Reference: zero-state regulation; control law u(k) = -K @ x(k).
+Continuous-time LQR: Q = diag(50,1,...,50,1), R = [[0.01]].
+K = inv(R) @ B.T @ P, P = solve_continuous_are(A,B,Q,R).
+Discretization: scipy.signal.cont2discrete, ZOH, dt=0.1 s.
+Continuous plant matrices: A (18, 18), B (18, 1)
+Input gain K: [[ 0.911795163337, 11.763976618943,  2.228926293903, 22.88412993647 ,
+   4.327257147477, 32.661526433766,  7.528287269966, 40.298677199664,
+  12.078982967339, 44.873712745067, 18.126198870226, 45.325361250083,
+  25.692137269707, 40.436399676451, 35.26118728602 , 29.115013532784,
+  56.90935317091 , 15.524186316046]]
+
+Cryptographic construction
+--------------------------
+Modulus q: 2147483647
+Secret matrix: 18x18, uniform integers in [0, q//1000) = [0, 2147483)
+Noise: Box-Muller Gaussian-like integer samples (reduced from the original sigma=sqrt(18)=4.24264068712); target sigma=1; sampled rounded noise min=-4, max=4, standard deviation=1.05787169138
+Random seed: 42
+State scale: 65536; m_int=round(x*65536)
+Feedback representation: round((-K)*256); gain scale=256 (Q8, chosen in this simulation and not specified in the report/C example), while the report's C implementation stores F as integer coefficients and applies the 2^16 scale to the state message. Effective control scale: 16777216.
+Ciphertext recurrence: V[k]=(S@V[k-1]+m[k]+e[k]) mod q; V[-1]=0.
+Control equation implemented as documented: (-K)_int@V[k] - (-K)_int@(S@V[k-1] mod q), modulo q, then centered decode.
+Centered signed output range: ±63.9999999404 control units. A Q8 gain scale is used to preserve fractional gain accuracy while keeping the entire measured control trajectory within that range; the gain matrix K itself is still computed from the specified continuous-time CARE.
+Measured maximum |u_LWE|: 56.9140043855; maximum absolute unwrapped control integer: 954858545 (center limit 1073741823).
+At this measured range, floor((q//2)/(state_scale*max|u|)) = 287; Q8 is the largest power-of-two gain scale below that bound (Q9 would wrap). This is a trajectory-specific mathematical range choice, not a Sir-specified parameter.
+Evaluation classification: custom modular recurrence cancellation using S; this is not genuine homomorphic evaluation.
+
+Measured per-step timing (mean over 200 recorded steps)
+--------------------------------------------------------
+Encrypt (state encode + noise + recurrence): 0.0131769 ms
+Evaluation/control (reported modular equation): 0.00522876 ms
+Decrypt/recovery (centered state/control decode): 0.01024482 ms
+Total (sum of measured operations): 0.02865048 ms
+Setup/key generation (RNG + S creation, excluded from per-step): 0.162761 ms.
+
+Serialized sizes
+-----------------
+Serialized state ciphertext payload (would be sent to a controller): 72 bytes (0.0703125 KB), measured from the serialized big-endian uint32 representation. No network transfer is implemented or timed.
+Encrypted control/result sent to actuator: N/A; this implementation decodes the reported modular result locally and sends no result ciphertext.
+
+Numerical validation
+--------------------
+Fixed-point state encoding/decoding: PASS
+Recursive ciphertext/state recovery: PASS
+Signed control recovery (positive, negative, zero, large): PASS
+Centered modular interval boundaries/wraparound: PASS
+Report control equation and physical signed recovery: PASS
+Initial x[16]=1 control recovery against plaintext: PASS
+Every run state recovered within fixed-point plus sampled-noise bound: PASS
+Control recovery against plaintext baseline: PASS
+Overall recovery validation: PASS
+Report/C gain-representation conformance: NOT ESTABLISHED (Q8 is simulation-specific; report/C use an integer F but do not define the mapping from the specified fractional LQR K to F).
+Standard LWE or homomorphic-encryption security: NOT CLAIMED. The implementation evaluates by secret-key modular recurrence cancellation.
+Maximum documented per-step control-error tolerance: 0.0201505613928
+Maximum state error max_k ||x_LWE-x_plain||_2: 0.000725410848705
+Maximum control error max_k |u_LWE-u_plain|: 0.0144361658317
+Numerical/overflow issues: No integer overflow was observed; all modular accumulations use Python arbitrary-precision integers.
+
+Failure caveat
+---------------
+The report does not specify the Q8 gain representation used here. Its C example uses integer coefficients in F and does not implement the 18-state LQR gain. Therefore arithmetic/control recovery for this explicit variant passes, but reference conformance and a definitive LWE-vs-CKKS comparison are not established. The simulated evaluation has access to the secret matrix/pad, so it can recover state values; this is not privacy-preserving untrusted-controller evaluation. The custom scheme is not standard HE and makes no security claim.
+When validation fails, the generated plots are diagnostic measurements only and must not be interpreted as successful encrypted control.
